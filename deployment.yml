@@ -16,29 +16,14 @@ spec:
     spec:
       containers:
         - name: journal
-          image: rajat1611/journal-app:3
+          image: rajat1611/journal-app:4
           ports:
-            - containerPort: 5000
-
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: 5000
-            initialDelaySeconds: 1
-            periodSeconds: 2
-            failureThreshold: 1
-
-          readinessProbe:
-            httpGet:
-              path: /healthz
-              port: 5000
-            initialDelaySeconds: 1
-            periodSeconds: 1
-
+            - name: http
+              containerPort: 5000
           resources:
             requests:
               memory: "64Mi"
               cpu: "250m"
             limits:
               memory: "128Mi"
-              cpu: "500m
+              cpu: "500m"
