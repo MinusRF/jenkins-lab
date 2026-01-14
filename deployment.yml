@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: journal
-          image: rajat1611/journal-app:15
+          image: rajat1611/journal-app:16
           ports:
             - name: http
               containerPort: 5000
