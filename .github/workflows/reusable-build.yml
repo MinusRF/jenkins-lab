@@ -1,0 +1,115 @@
+name: "Reusable: Build Docker Image"
+
+# This is a reusable workflow that can be called from other workflows
+on:
+  workflow_call:
+    # Define inputs that calling workflows must/can provide
+    inputs:
+      python-version:
+        description: 'Python version to use'
+        required: false
+        type: string
+        default: '3.9'
+      
+      docker-tag:
+        description: 'Docker image tag'
+        required: true
+        type: string
+      
+      environment:
+        description: 'Deployment environment'
+        required: false
+        type: string
+        default: 'dev'
+    
+    # Define outputs that this workflow provides
+    outputs:
+      build-status:
+        description: 'Build completion status'
+        value: ${{ jobs.build.outputs.status }}
+      
+      image-tag:
+        description: 'Docker image tag used'
+        value: ${{ jobs.build.outputs.tag }}
+      
+      build-time:
+        description: 'Time taken to build'
+        value: ${{ jobs.build.outputs.time }}
+    
+    # Secrets can be passed from calling workflow
+    # secrets:
+    #   docker-username:
+    #     required: false
+    #   docker-password:
+    #     required: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    # Define job-level outputs
+    outputs:
+      status: ${{ steps.build-status.outputs.status }}
+      tag: ${{ steps.build-status.outputs.tag }}
+      time: ${{ steps.build-status.outputs.time }}
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python ${{ inputs.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+      
+      - name: Cache Dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+      
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+      
+      - name: Build Docker Image
+        id: docker-build
+        run: |
+          START_TIME=$(date +%s)
+          
+          docker build \
+            --build-arg PYTHON_VERSION=${{ inputs.python-version }} \
+            --build-arg ENVIRONMENT=${{ inputs.environment }} \
+            -t jenkins-app:${{ inputs.docker-tag }} \
+            .
+          
+          END_TIME=$(date +%s)
+          BUILD_TIME=$((END_TIME - START_TIME))
+          
+          echo "Docker image built successfully"
+          echo "Build took ${BUILD_TIME} seconds"
+          echo "build_duration=${BUILD_TIME}" >> $GITHUB_OUTPUT
+      
+      - name: Verify Image
+        run: |
+          docker images jenkins-app:${{ inputs.docker-tag }}
+          docker inspect jenkins-app:${{ inputs.docker-tag }}
+      
+      - name: Set Build Status
+        id: build-status
+        run: |
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "tag=${{ inputs.docker-tag }}" >> $GITHUB_OUTPUT
+          echo "time=${{ steps.docker-build.outputs.build_duration }}s" >> $GITHUB_OUTPUT
+      
+      - name: Save Docker Image
+        run: |
+          mkdir -p /tmp/docker-images
+          docker save jenkins-app:${{ inputs.docker-tag }} -o /tmp/docker-images/image.tar
+      
+      - name: Upload Image Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image-${{ inputs.docker-tag }}
+          path: /tmp/docker-images/image.tar
+          retention-days: 1

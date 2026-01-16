@@ -1,0 +1,124 @@
+name: "Reusable: Test Docker Image"
+
+# This is a reusable workflow for testing
+on:
+  workflow_call:
+    inputs:
+      docker-tag:
+        description: 'Docker image tag to test'
+        required: true
+        type: string
+      
+      run-integration-tests:
+        description: 'Run integration tests?'
+        required: false
+        type: boolean
+        default: false
+    
+    outputs:
+      test-status:
+        description: 'Test completion status'
+        value: ${{ jobs.test.outputs.status }}
+      
+      tests-passed:
+        description: 'Number of tests passed'
+        value: ${{ jobs.test.outputs.passed }}
+      
+      coverage:
+        description: 'Code coverage percentage'
+        value: ${{ jobs.test.outputs.coverage }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    outputs:
+      status: ${{ steps.test-summary.outputs.status }}
+      passed: ${{ steps.test-summary.outputs.passed }}
+      coverage: ${{ steps.test-summary.outputs.coverage }}
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      
+      - name: Download Docker Image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image-${{ inputs.docker-tag }}
+          path: /tmp/docker-images
+      
+      - name: Load Docker Image
+        run: |
+          docker load -i /tmp/docker-images/image.tar
+          docker images
+      
+      - name: Run Unit Tests
+        id: unit-tests
+        run: |
+          echo "Running unit tests..."
+          docker run --rm jenkins-app:${{ inputs.docker-tag }} python --version
+          
+          # Simulate test results
+          TESTS_RUN=10
+          TESTS_PASSED=9
+          echo "tests_run=${TESTS_RUN}" >> $GITHUB_OUTPUT
+          echo "tests_passed=${TESTS_PASSED}" >> $GITHUB_OUTPUT
+      
+      - name: Run Integration Tests
+        if: ${{ inputs.run-integration-tests }}
+        run: |
+          echo "Running integration tests..."
+          docker run -d -p 5000:5000 --name test-container jenkins-app:${{ inputs.docker-tag }}
+          sleep 5
+          
+          # Test the application
+          curl -f http://localhost:5000 || exit 1
+          
+          docker logs test-container
+          docker stop test-container
+          docker rm test-container
+      
+      - name: Calculate Coverage
+        id: coverage
+        run: |
+          # Simulate coverage calculation
+          COVERAGE=85
+          echo "coverage=${COVERAGE}" >> $GITHUB_OUTPUT
+          echo "Code coverage: ${COVERAGE}%"
+      
+      - name: Generate Test Report
+        run: |
+          cat > test-report.txt << EOF
+          ==========================================
+          TEST REPORT
+          ==========================================
+          Docker Tag: ${{ inputs.docker-tag }}
+          
+          Unit Tests:
+            - Total: ${{ steps.unit-tests.outputs.tests_run }}
+            - Passed: ${{ steps.unit-tests.outputs.tests_passed }}
+            - Failed: ${{ steps.unit-tests.outputs.tests_run - steps.unit-tests.outputs.tests_passed }}
+          
+          Integration Tests: ${{ inputs.run-integration-tests && 'PASSED' || 'SKIPPED' }}
+          
+          Coverage: ${{ steps.coverage.outputs.coverage }}%
+          
+          Status: SUCCESS
+          Timestamp: $(date)
+          ==========================================
+          EOF
+          
+          cat test-report.txt
+      
+      - name: Upload Test Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-${{ inputs.docker-tag }}
+          path: test-report.txt
+      
+      - name: Test Summary
+        id: test-summary
+        run: |
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "passed=${{ steps.unit-tests.outputs.tests_passed }}" >> $GITHUB_OUTPUT
+          echo "coverage=${{ steps.coverage.outputs.coverage }}%" >> $GITHUB_OUTPUT

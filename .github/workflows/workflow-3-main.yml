@@ -1,0 +1,66 @@
+name: "Workflow 3: Reusable Workflows"
+
+# Topics covered:
+# - Reusable workflows (calling other workflows)
+# - Passing inputs and secrets to reusable workflows
+# - Outputs from reusable workflows
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target Environment'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+        default: 'dev'
+      
+      docker_registry:
+        description: 'Docker Registry'
+        type: string
+        default: 'docker.io'
+
+jobs:
+  # Call the reusable build workflow
+  call-build-workflow:
+    uses: ./.github/workflows/reusable-build.yml
+    with:
+      python-version: '3.9'
+      docker-tag: ${{ github.sha }}
+      environment: ${{ inputs.environment }}
+    # Pass secrets if needed
+    # secrets: inherit
+
+  # Call the reusable test workflow
+  call-test-workflow:
+    needs: call-build-workflow
+    uses: ./.github/workflows/reusable-test.yml
+    with:
+      docker-tag: ${{ github.sha }}
+      run-integration-tests: true
+
+  # Use outputs from reusable workflow
+  display-results:
+    runs-on: ubuntu-latest
+    needs: [call-build-workflow, call-test-workflow]
+    
+    steps:
+      - name: Display Build Information
+        run: |
+          echo "=== Build Results ==="
+          echo "Build Status: ${{ needs.call-build-workflow.outputs.build-status }}"
+          echo "Image Tag: ${{ needs.call-build-workflow.outputs.image-tag }}"
+          echo "Build Time: ${{ needs.call-build-workflow.outputs.build-time }}"
+      
+      - name: Display Test Results
+        run: |
+          echo "=== Test Results ==="
+          echo "Test Status: ${{ needs.call-test-workflow.outputs.test-status }}"
+          echo "Tests Passed: ${{ needs.call-test-workflow.outputs.tests-passed }}"
+          echo "Coverage: ${{ needs.call-test-workflow.outputs.coverage }}"
+      
+      - name: Final Summary
+        run: |
+          echo "Workflow execution completed for environment: ${{ inputs.environment }}"

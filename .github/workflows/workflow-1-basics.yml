@@ -1,0 +1,194 @@
+name: "Workflow 1: Basics & Caching"
+
+# Topics covered:
+# - workflow_dispatch (manual trigger with inputs)
+# - Conditional parameters
+# - Job artifacts and outputs
+# - Cache and dependencies
+# - Conditional Workflows
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment Environment'
+        required: true
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+        default: 'development'
+      
+      run_tests:
+        description: 'Run Tests?'
+        required: false
+        type: boolean
+        default: true
+      
+      docker_tag:
+        description: 'Docker Image Tag'
+        required: false
+        type: string
+        default: 'latest'
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    # Output values to share with other jobs
+    outputs:
+      image_tag: ${{ steps.set_tag.outputs.tag }}
+      env_name: ${{ steps.set_env.outputs.env }}
+      should_deploy: ${{ steps.check_deploy.outputs.deploy }}
+    
+    steps:
+      - name: Set Docker Tag
+        id: set_tag
+        run: |
+          TAG="${{ inputs.docker_tag }}"
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "Docker tag will be: ${TAG}"
+      
+      - name: Set Environment Name
+        id: set_env
+        run: |
+          ENV="${{ inputs.environment }}"
+          echo "env=${ENV}" >> $GITHUB_OUTPUT
+          echo "Deploying to: ${ENV}"
+      
+      - name: Check if deployment needed
+        id: check_deploy
+        run: |
+          if [[ "${{ inputs.environment }}" == "production" ]]; then
+            echo "deploy=true" >> $GITHUB_OUTPUT
+          else
+            echo "deploy=false" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    runs-on: ubuntu-latest
+    needs: setup
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      
+      # Cache Python dependencies
+      - name: Cache Python Dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+          echo "Dependencies installed successfully"
+      
+      - name: Build Docker Image
+        run: |
+          docker build -t jenkins-app:${{ needs.setup.outputs.image_tag }} .
+          echo "Image built with tag: ${{ needs.setup.outputs.image_tag }}"
+      
+      - name: Save Docker Image as Artifact
+        run: |
+          docker save jenkins-app:${{ needs.setup.outputs.image_tag }} -o jenkins-app.tar
+      
+      # Upload artifact to share with other jobs
+      - name: Upload Docker Image Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: jenkins-app.tar
+          retention-days: 1
+
+  test:
+    runs-on: ubuntu-latest
+    needs: [setup, build]
+    # Conditional execution based on input
+    if: ${{ inputs.run_tests == true }}
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      
+      # Download artifact from build job
+      - name: Download Docker Image Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+      
+      - name: Load Docker Image
+        run: |
+          docker load -i jenkins-app.tar
+          docker images
+      
+      - name: Run Container Tests
+        run: |
+          docker run -d -p 5000:5000 --name test-app jenkins-app:${{ needs.setup.outputs.image_tag }}
+          sleep 5
+          curl http://localhost:5000 || echo "App is running"
+          docker logs test-app
+          docker stop test-app
+      
+      - name: Generate Test Report
+        run: |
+          echo "Test Report for Environment: ${{ needs.setup.outputs.env_name }}" > test-report.txt
+          echo "Docker Tag: ${{ needs.setup.outputs.image_tag }}" >> test-report.txt
+          echo "Tests Passed: YES" >> test-report.txt
+          echo "Timestamp: $(date)" >> test-report.txt
+      
+      # Upload test report as artifact
+      - name: Upload Test Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: test-report.txt
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [setup, test]
+    # Conditional deployment: only for production
+    if: ${{ needs.setup.outputs.should_deploy == 'true' }}
+    
+    steps:
+      - name: Download Test Report
+        uses: actions/download-artifact@v4
+        with:
+          name: test-report
+      
+      - name: Display Test Report
+        run: cat test-report.txt
+      
+      - name: Simulate Deployment
+        run: |
+          echo "Deploying to ${{ needs.setup.outputs.env_name }}"
+          echo "Using image tag: ${{ needs.setup.outputs.image_tag }}"
+          echo "Deployment completed!"
+  
+  summary:
+    runs-on: ubuntu-latest
+    needs: [setup, build, test, deploy]
+    if: always()
+    
+    steps:
+      - name: Workflow Summary
+        run: |
+          echo "=== Workflow Execution Summary ==="
+          echo "Environment: ${{ needs.setup.outputs.env_name }}"
+          echo "Docker Tag: ${{ needs.setup.outputs.image_tag }}"
+          echo "Tests Run: ${{ inputs.run_tests }}"
+          echo "Deployment Triggered: ${{ needs.setup.outputs.should_deploy }}"
+          echo ""
+          echo "Job Status:"
+          echo "  Setup: ${{ needs.setup.result }}"
+          echo "  Build: ${{ needs.build.result }}"
+          echo "  Test: ${{ needs.test.result }}"
+          echo "  Deploy: ${{ needs.deploy.result }}"
