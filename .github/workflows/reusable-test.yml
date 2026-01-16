@@ -97,7 +97,7 @@ jobs:
           Unit Tests:
             - Total: ${{ steps.unit-tests.outputs.tests_run }}
             - Passed: ${{ steps.unit-tests.outputs.tests_passed }}
-            - Failed: ${{ steps.unit-tests.outputs.tests_run - steps.unit-tests.outputs.tests_passed }}
+            - Failed: $(( ${{ steps.unit-tests.outputs.tests_run }} - ${{ steps.unit-tests.outputs.tests_passed }} ))
           
           Integration Tests: ${{ inputs.run-integration-tests && 'PASSED' || 'SKIPPED' }}
           
