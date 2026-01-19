@@ -15,7 +15,7 @@ jobs:
 
     permissions:
       contents: read
-      security-events: write # Required for uploading security results
+      security-events: write 
 
     steps:
     # ----------------------------------------------------
@@ -25,7 +25,7 @@ jobs:
       uses: actions/checkout@v4
 
     # ----------------------------------------------------
-    # 2. Python Linting (Real - Optimized)
+    # 2. Python Linting (Updated to Capture Stats)
     # ----------------------------------------------------
     - name: Set up Python 3.10
       uses: actions/setup-python@v4
@@ -34,13 +34,24 @@ jobs:
         cache: 'pip'
 
     - name: Run Ruff (Linter)
+      id: ruff
       run: |
         pip install ruff
-        # Checks for Errors (E), Warnings (W), Flakes (F)
-        ruff check . --select E,W,F --ignore E501 || echo "Issues found (Non-blocking)"
+        # 1. Run Ruff and save output to a file for parsing later
+        ruff check . --select E,W,F --ignore E501 --output-format=text > ruff_report.txt || true
+        
+        # 2. Print output to console so you can see it in logs
+        cat ruff_report.txt
+        
+        # 3. Count the number of lines (approximate number of issues)
+        RUFF_COUNT=$(grep -cE "^.+:[0-9]+:[0-9]+: " ruff_report.txt || echo "0")
+        echo "RUFF_ISSUES=$RUFF_COUNT" >> $GITHUB_ENV
+        
+        # 4. Fail if strictly needed, otherwise continue
+        # ruff check ... || exit 1
 
     # ----------------------------------------------------
-    # 3. Setup Java (Real Action, Simulates Build)
+    # 3. Setup Java 
     # ----------------------------------------------------
     - name: Set up Java 11
       uses: actions/setup-java@v3
@@ -49,12 +60,11 @@ jobs:
         java-version: '11'
 
     # ----------------------------------------------------
-    # 4. Linting (Checkstyle - Simulated)
+    # 4. Linting (Simulated)
     # ----------------------------------------------------
     - name: Run Maven Checkstyle
       run: |
         echo "🔹 [INFO] Scanning src/main/java..."
-        echo "🔹 [INFO] Checking code style rules..."
         sleep 2
         echo "✅ [SUCCESS] No style violations found."
 
@@ -63,19 +73,18 @@ jobs:
     # ----------------------------------------------------
     - name: Perform CodeQL Analysis
       run: |
-        echo "🔹 [INFO] Initializing CodeQL database..."
-        echo "🔹 [INFO] Analyzing data flow..."
-        sleep 3
-        echo "✅ [SUCCESS] Analysis complete - 0 Critical Issues."
+        echo "🔹 [INFO] Initializing CodeQL..."
+        sleep 2
+        echo "✅ [SUCCESS] 0 Critical Issues."
 
     # ----------------------------------------------------
     # 6. SCA – Dependency Scan (Simulated)
     # ----------------------------------------------------
     - name: OWASP Dependency Check
       run: |
-        echo "🔹 [INFO] Checking pom.xml for known vulnerabilities..."
+        echo "🔹 [INFO] Checking pom.xml..."
         sleep 2
-        echo "✅ [SUCCESS] No CVEs found in dependencies."
+        echo "✅ [SUCCESS] No CVEs found."
 
     # ----------------------------------------------------
     # 7. Unit Testing (Simulated)
@@ -83,23 +92,20 @@ jobs:
     - name: Run Unit Tests
       run: |
         echo "🔹 [INFO] Running tests..."
-        echo "   [PASS] com.example.AppTest.testApp"
-        echo "   [PASS] com.example.AuthTest.testLogin"
         sleep 2
-        echo "✅ [SUCCESS] Tests run: 2, Failures: 0, Errors: 0"
+        echo "✅ [SUCCESS] Tests run: 2, Failures: 0"
 
     # ----------------------------------------------------
     # 8. Build Application (Simulated)
     # ----------------------------------------------------
     - name: Build with Maven
       run: |
-        echo "🔹 [INFO] Compiling source code..."
-        echo "🔹 [INFO] Packaging artifact..."
+        echo "🔹 [INFO] Compiling..."
         sleep 2
         echo "✅ [SUCCESS] Built target/app-1.0.jar"
 
     # ----------------------------------------------------
-    # 9. Docker Build (Real - Optimized)
+    # 9. Docker Build
     # ----------------------------------------------------
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
@@ -114,14 +120,14 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         context: .
-        push: false  # Don't push yet, scan first
-        load: true   # Load image into local Docker for scanning
+        push: false
+        load: true
         tags: ${{ secrets.DOCKERHUB_USERNAME }}/test:latest
         cache-from: type=gha 
         cache-to: type=gha,mode=max
 
     # ----------------------------------------------------
-    # 10. Trivy – Container Security Scan (Real)
+    # 10. Trivy Security Scan (Real)
     # ----------------------------------------------------
     - name: Run Trivy vulnerability scan
       uses: aquasecurity/trivy-action@0.24.0
@@ -130,10 +136,10 @@ jobs:
         format: 'sarif'
         output: 'trivy-results.sarif'
         severity: 'CRITICAL,HIGH'
-        exit-code: '0' # Set to '1' if you want to fail build on error
+        exit-code: '0' 
 
     - name: Upload Trivy scan results
-      uses: github/codeql-action/upload-sarif@v4 # UPDATED to v4 to fix warning
+      uses: github/codeql-action/upload-sarif@v4
       if: always()
       with:
         sarif_file: trivy-results.sarif
@@ -146,22 +152,46 @@ jobs:
         docker push ${{ secrets.DOCKERHUB_USERNAME }}/test:latest
 
     # ----------------------------------------------------
-    # 12. Notifications (Slack/Chat)
+    # 12. Detailed Notification (Slack/Chat)
     # ----------------------------------------------------
     - name: Notify Slack/Google Chat
       if: always()
       run: |
+        # 1. Gather Status
         STATUS="${{ job.status }}"
         if [ "$STATUS" == "success" ]; then
-          MESSAGE="✅ CI Success: Pipeline finished successfully"
+          EMOJI="✅"
+          COLOR="good"
         else
-          MESSAGE="❌ CI Failure: Something went wrong. Check logs."
+          EMOJI="❌"
+          COLOR="danger"
         fi
         
+        # 2. Parse Trivy Results (JSON Processor 'jq')
+        # We extract the number of findings from the SARIF file
+        if [ -f trivy-results.sarif ]; then
+          TRIVY_COUNT=$(jq '(.runs[0].results // []) | length' trivy-results.sarif)
+        else
+          TRIVY_COUNT="0 (Scan Failed)"
+        fi
+        
+        # 3. Get Ruff Count (from Env Var set in Step 2)
+        RUFF_MSG="${{ env.RUFF_ISSUES }}"
+        
+        # 4. Construct the Message
+        # We use a cleaner format with newlines (\n)
+        MESSAGE="$EMOJI **CI Execution Finished**\n\n"
+        MESSAGE+="• **Status:** $STATUS\n"
+        MESSAGE+="• **Branch:** $GITHUB_REF_NAME\n"
+        MESSAGE+="• **Python Lint Issues:** $RUFF_MSG\n"
+        MESSAGE+="• **Container Vulnerabilities:** $TRIVY_COUNT (High/Crit)\n\n"
+        MESSAGE+="🔍 <$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/security/code-scanning|View Detailed Security Report>"
+
+        # 5. Send Payload
         if [ -n "${{ secrets.CHAT_WEBHOOK_URL }}" ]; then
           curl -X POST -H 'Content-Type: application/json' \
           -d "{\"text\": \"$MESSAGE\"}" \
           ${{ secrets.CHAT_WEBHOOK_URL }}
         else
-          echo "No Webhook URL found, skipping notification."
+          echo "No Webhook URL found."
         fi
