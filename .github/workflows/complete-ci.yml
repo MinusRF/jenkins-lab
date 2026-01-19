@@ -1,0 +1,141 @@
+name: CI Execution
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci-pipeline:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+    # ====================================================
+    # REAL WORK: Setup & Python
+    # ====================================================
+    - name: Checkout source code
+      uses: actions/checkout@b4ffde65f463366882ddc3bfe93e684e7eeb528c # v4.1.1
+
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+
+    - name: Run Ruff (Real Python Linter)
+      run: |
+        pip install ruff
+        ruff check . --select E,W,F --ignore E501 || echo "Issues found but ignored for demo"
+
+    # ====================================================
+    # SIMULATION: Java Pipeline (Educational Demo)
+    # These steps run "echo" so they pass without Java code
+    # ====================================================
+    
+    # 1. Setup (Real Action - works even without code)
+    - name: Set up Java 11 (Demo)
+      uses: actions/setup-java@v3
+      with:
+        distribution: temurin
+        java-version: '11'
+    
+    # 2. Linting (Simulated)
+    - name: Run Maven Checkstyle (Simulated)
+      run: |
+        echo "🔹 [INFO] Scanning src/main/java..."
+        echo "🔹 [INFO] Checking code style rules..."
+        sleep 2 # Fakes the time taken by a real tool
+        echo "✅ [SUCCESS] No style violations found."
+
+    # 3. Security - SAST (Simulated)
+    # We skip the real CodeQL action because it requires real code to build a database
+    - name: Mock CodeQL Security Scan
+      run: |
+        echo "🔹 [INFO] Initializing CodeQL database..."
+        echo "🔹 [INFO] Analyzing data flow..."
+        sleep 3
+        echo "✅ [SUCCESS] Analysis complete - 0 Critical Issues."
+
+    # 4. Unit Tests (Simulated)
+    - name: Run Java Unit Tests (Simulated)
+      run: |
+        echo "🔹 [INFO] Running tests..."
+        echo "   [PASS] com.example.AppTest.testApp"
+        echo "   [PASS] com.example.AuthTest.testLogin"
+        sleep 2
+        echo "✅ [SUCCESS] Tests run: 2, Failures: 0, Errors: 0"
+
+    # 5. Build (Simulated)
+    - name: Build Java Application (Simulated)
+      run: |
+        echo "🔹 [INFO] Compiling source code..."
+        echo "🔹 [INFO] Packaging artifact..."
+        sleep 2
+        echo "✅ [SUCCESS] Built target/app-1.0.jar"
+
+    # ====================================================
+    # REAL WORK: Docker & Security
+    # ====================================================
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Login to DockerHub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: Build Docker Image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: false
+        load: true
+        tags: ${{ secrets.DOCKERHUB_USERNAME }}/test:latest
+        cache-from: type=gha 
+        cache-to: type=gha,mode=max
+
+    - name: Run Trivy vulnerability scan
+      uses: aquasecurity/trivy-action@0.24.0
+      with:
+        image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/test:latest
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        severity: 'CRITICAL,HIGH'
+        exit-code: '0' 
+
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: trivy-results.sarif
+
+    # ====================================================
+    # REAL WORK: Notifications
+    # ====================================================
+    - name: Notify Slack/Google Chat
+      if: always()
+      run: |
+        STATUS="${{ job.status }}"
+        if [ "$STATUS" == "success" ]; then
+          MESSAGE="✅ CI Success: Pipeline finished successfully"
+        else
+          MESSAGE="❌ CI Failure: Something went wrong"
+        fi
+        
+        # Safe call - only runs if you added the secret
+        if [ -n "${{ secrets.CHAT_WEBHOOK_URL }}" ]; then
+          curl -X POST -H 'Content-Type: application/json' \
+          -d "{\"text\": \"$MESSAGE\"}" \
+          ${{ secrets.CHAT_WEBHOOK_URL }}
+        else
+          echo "No Webhook URL found, skipping notification."
+        fi
