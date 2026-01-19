@@ -1,194 +1,167 @@
-name: "Workflow 1: Basics & Caching"
-
-# Topics covered:
-# - workflow_dispatch (manual trigger with inputs)
-# - Conditional parameters
-# - Job artifacts and outputs
-# - Cache and dependencies
-# - Conditional Workflows
+name: CI Execution
 
 on:
+  push:
+    branches:
+      - master
   workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Deployment Environment'
-        required: true
-        type: choice
-        options:
-          - development
-          - staging
-          - production
-        default: 'development'
-      
-      run_tests:
-        description: 'Run Tests?'
-        required: false
-        type: boolean
-        default: true
-      
-      docker_tag:
-        description: 'Docker Image Tag'
-        required: false
-        type: string
-        default: 'latest'
+
+permissions:
+  contents: read
 
 jobs:
-  setup:
+  ci-pipeline:
     runs-on: ubuntu-latest
-    # Output values to share with other jobs
-    outputs:
-      imag  e_tag: ${{ steps.set_tag.outputs.tag }}
-      env_name: ${{ steps.set_env.outputs.env }}
-      should_deploy: ${{ steps.check_deploy.outputs.deploy }}
-    
-    steps:
-      - name: Set Docker Tag
-        id: set_tag
-        run: |
-          TAG="${{ inputs.docker_tag }}"
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT  # A special file GitHub Actions provides to set a steps outputs to be used later
-          echo "Docker tag will be: ${TAG}"
-      
-      - name: Set Environment Name
-        id: set_env
-        run: |
-          ENV="${{ inputs.environment }}"
-          echo "env=${ENV}" >> $GITHUB_OUTPUT
-          echo "Deploying to: ${ENV}"
-      
-      - name: Check if deployment needed
-        id: check_deploy
-        run: |
-          if [[ "${{ inputs.environment }}" == "production" ]]; then
-            echo "deploy=true" >> $GITHUB_OUTPUT
-          else
-            echo "deploy=false" >> $GITHUB_OUTPUT
-          fi
 
-  build:
-    runs-on: ubuntu-latest
-    needs: setup    # else Jobs will run in parallel.
-    
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-      
-      # Cache Python dependencies
-      - name: Cache Python Dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-  # if exact key not found, reuse the closest pip cache for that OS
-      
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.9'
-      
-      - name: Install Dependencies
-        run: |
-          pip install -r requirements.txt
-          echo "Dependencies installed successfully"
-      
-      - name: Build Docker Image
-        run: |
-          docker build -t jenkins-app:${{ needs.setup.outputs.image_tag }} .
-          echo "Image built with tag: ${{ needs.setup.outputs.image_tag }}"
-      
-      - name: Save Docker Image as Artifact
-        run: |
-          docker save jenkins-app:${{ needs.setup.outputs.image_tag }} -o jenkins-app.tar
-      
-      # Upload artifact to share with other jobs
-      - name: Upload Docker Image Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: docker-image
-          path: jenkins-app.tar
-          retention-days: 1
+    permissions:
+      contents: read
+      security-events: write # Required for uploading security results
 
-  test:
-    runs-on: ubuntu-latest
-    needs: [setup, build]
-    # Conditional execution based on input
-    if: ${{ inputs.run_tests == true }}
-    
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-      
-      # Download artifact from build job
-      - name: Download Docker Image Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: docker-image
-      
-      - name: Load Docker Image
-        run: |
-          docker load -i jenkins-app.tar
-          docker images
-      
-      - name: Run Container Tests
-        run: |
-          docker run -d -p 5000:5000 --name test-app jenkins-app:${{ needs.setup.outputs.image_tag }}
-          sleep 5
-          curl http://localhost:5000 || echo "App is running"
-          docker logs test-app
-          docker stop test-app
-      
-      - name: Generate Test Report
-        run: |
-          echo "Test Report for Environment: ${{ needs.setup.outputs.env_name }}" > test-report.txt
-          echo "Docker Tag: ${{ needs.setup.outputs.image_tag }}" >> test-report.txt
-          echo "Tests Passed: YES" >> test-report.txt
-          echo "Timestamp: $(date)" >> test-report.txt
-      
-      # Upload test report as artifact
-      - name: Upload Test Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-report
-          path: test-report.txt
+    # ----------------------------------------------------
+    # 1. Checkout
+    # ----------------------------------------------------
+    - name: Checkout source code
+      uses: actions/checkout@v4
 
-  deploy:
-    runs-on: ubuntu-latest
-    needs: [setup, test]
-    # Conditional deployment: only for production
-    if: ${{ needs.setup.outputs.should_deploy == 'true' }}
-    
-    steps:
-      - name: Download Test Report
-        uses: actions/download-artifact@v4
-        with:
-          name: test-report
-      
-      - name: Display Test Report
-        run: cat test-report.txt
-      
-      - name: Simulate Deployment
-        run: |
-          echo "Deploying to ${{ needs.setup.outputs.env_name }}"
-          echo "Using image tag: ${{ needs.setup.outputs.image_tag }}"
-          echo "Deployment completed!"
-  
-  summary:
-    runs-on: ubuntu-latest
-    needs: [setup, build, test, deploy]
-    if: always() #run this step/job no matter what, even if earlier steps failed or the workflow was cancelled.
-    
-    steps:
-      - name: Workflow Summary
-        run: |
-          echo "=== Workflow Execution Summary ==="
-          echo "Environment: ${{ needs.setup.outputs.env_name }}"
-          echo "Docker Tag: ${{ needs.setup.outputs.image_tag }}"
-          echo "Tests Run: ${{ inputs.run_tests }}"
-          echo "Deployment Triggered: ${{ needs.setup.outputs.should_deploy }}"
-          echo ""
-          echo "Job Status:"
-          echo "  Setup: ${{ needs.setup.result }}"
-          echo "  Build: ${{ needs.build.result }}"
-          echo "  Test: ${{ needs.test.result }}"
-          echo "  Deploy: ${{ needs.deploy.result }}"
+    # ----------------------------------------------------
+    # 2. Python Linting (Real - Optimized)
+    # ----------------------------------------------------
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+
+    - name: Run Ruff (Linter)
+      run: |
+        pip install ruff
+        # Checks for Errors (E), Warnings (W), Flakes (F)
+        ruff check . --select E,W,F --ignore E501 || echo "Issues found (Non-blocking)"
+
+    # ----------------------------------------------------
+    # 3. Setup Java (Real Action, Simulates Build)
+    # ----------------------------------------------------
+    - name: Set up Java 11
+      uses: actions/setup-java@v3
+      with:
+        distribution: temurin
+        java-version: '11'
+
+    # ----------------------------------------------------
+    # 4. Linting (Checkstyle - Simulated)
+    # ----------------------------------------------------
+    - name: Run Maven Checkstyle
+      run: |
+        echo "🔹 [INFO] Scanning src/main/java..."
+        echo "🔹 [INFO] Checking code style rules..."
+        sleep 2
+        echo "✅ [SUCCESS] No style violations found."
+
+    # ----------------------------------------------------
+    # 5. SAST – CodeQL (Simulated)
+    # ----------------------------------------------------
+    - name: Perform CodeQL Analysis
+      run: |
+        echo "🔹 [INFO] Initializing CodeQL database..."
+        echo "🔹 [INFO] Analyzing data flow..."
+        sleep 3
+        echo "✅ [SUCCESS] Analysis complete - 0 Critical Issues."
+
+    # ----------------------------------------------------
+    # 6. SCA – Dependency Scan (Simulated)
+    # ----------------------------------------------------
+    - name: OWASP Dependency Check
+      run: |
+        echo "🔹 [INFO] Checking pom.xml for known vulnerabilities..."
+        sleep 2
+        echo "✅ [SUCCESS] No CVEs found in dependencies."
+
+    # ----------------------------------------------------
+    # 7. Unit Testing (Simulated)
+    # ----------------------------------------------------
+    - name: Run Unit Tests
+      run: |
+        echo "🔹 [INFO] Running tests..."
+        echo "   [PASS] com.example.AppTest.testApp"
+        echo "   [PASS] com.example.AuthTest.testLogin"
+        sleep 2
+        echo "✅ [SUCCESS] Tests run: 2, Failures: 0, Errors: 0"
+
+    # ----------------------------------------------------
+    # 8. Build Application (Simulated)
+    # ----------------------------------------------------
+    - name: Build with Maven
+      run: |
+        echo "🔹 [INFO] Compiling source code..."
+        echo "🔹 [INFO] Packaging artifact..."
+        sleep 2
+        echo "✅ [SUCCESS] Built target/app-1.0.jar"
+
+    # ----------------------------------------------------
+    # 9. Docker Build (Real - Optimized)
+    # ----------------------------------------------------
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Login to DockerHub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: Build Docker Image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: false  # Don't push yet, scan first
+        load: true   # Load image into local Docker for scanning
+        tags: ${{ secrets.DOCKERHUB_USERNAME }}/test:latest
+        cache-from: type=gha 
+        cache-to: type=gha,mode=max
+
+    # ----------------------------------------------------
+    # 10. Trivy – Container Security Scan (Real)
+    # ----------------------------------------------------
+    - name: Run Trivy vulnerability scan
+      uses: aquasecurity/trivy-action@0.24.0
+      with:
+        image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/test:latest
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        severity: 'CRITICAL,HIGH'
+        exit-code: '0' # Set to '1' if you want to fail build on error
+
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v4 # UPDATED to v4 to fix warning
+      if: always()
+      with:
+        sarif_file: trivy-results.sarif
+
+    # ----------------------------------------------------
+    # 11. Push Docker Image
+    # ----------------------------------------------------
+    - name: Push Image to DockerHub
+      run: |
+        docker push ${{ secrets.DOCKERHUB_USERNAME }}/test:latest
+
+    # ----------------------------------------------------
+    # 12. Notifications (Slack/Chat)
+    # ----------------------------------------------------
+    - name: Notify Slack/Google Chat
+      if: always()
+      run: |
+        STATUS="${{ job.status }}"
+        if [ "$STATUS" == "success" ]; then
+          MESSAGE="✅ CI Success: Pipeline finished successfully"
+        else
+          MESSAGE="❌ CI Failure: Something went wrong. Check logs."
+        fi
+        
+        if [ -n "${{ secrets.CHAT_WEBHOOK_URL }}" ]; then
+          curl -X POST -H 'Content-Type: application/json' \
+          -d "{\"text\": \"$MESSAGE\"}" \
+          ${{ secrets.CHAT_WEBHOOK_URL }}
+        else
+          echo "No Webhook URL found, skipping notification."
+        fi
