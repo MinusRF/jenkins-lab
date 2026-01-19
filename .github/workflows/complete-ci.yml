@@ -16,16 +16,17 @@ jobs:
     permissions:
       contents: read
       security-events: write 
+      actions: read
 
     steps:
     # ----------------------------------------------------
-    # 1. Checkout
+    # 1. Checkout (REAL)
     # ----------------------------------------------------
     - name: Checkout source code
       uses: actions/checkout@v4
 
     # ----------------------------------------------------
-    # 2. Python Linting (Updated to Capture Stats)
+    # 2. Python Linting (REAL)
     # ----------------------------------------------------
     - name: Set up Python 3.10
       uses: actions/setup-python@v4
@@ -33,79 +34,81 @@ jobs:
         python-version: '3.10'
         cache: 'pip'
 
-    - name: Run Ruff (Linter)
+    - name: Run Ruff (Real Linter)
       id: ruff
       run: |
         pip install ruff
-        # 1. Run Ruff and save output to a file for parsing later
+        # Run Ruff. If it finds issues, capture them but don't fail yet.
         ruff check . --select E,W,F --ignore E501 --output-format=text > ruff_report.txt || true
         
-        # 2. Print output to console so you can see it in logs
         cat ruff_report.txt
         
-        # 3. Count the number of lines (approximate number of issues)
-        RUFF_COUNT=$(grep -cE "^.+:[0-9]+:[0-9]+: " ruff_report.txt || echo "0")
+        # Count issues safely
+        RUFF_COUNT=$(grep -cE "^.+:[0-9]+:[0-9]+: " ruff_report.txt || true)
+        if [ -z "$RUFF_COUNT" ]; then RUFF_COUNT=0; fi
         echo "RUFF_ISSUES=$RUFF_COUNT" >> $GITHUB_ENV
-        
-        # 4. Fail if strictly needed, otherwise continue
-        # ruff check ... || exit 1
 
     # ----------------------------------------------------
-    # 3. Setup Java 
+    # 3. SAST – CodeQL (REAL - PYTHON)
     # ----------------------------------------------------
-    - name: Set up Java 11
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: python # Changed from Java to Python
+
+    - name: Autobuild CodeQL
+      uses: github/codeql-action/autobuild@v3
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+
+    # ----------------------------------------------------
+    # 4. SCA – Dependency Scan (REAL - PYTHON)
+    # ----------------------------------------------------
+    - name: OWASP Dependency Check
+      uses: dependency-check/Dependency-Check_Action@main
+      with:
+        project: "python-app"
+        path: "." # Scans current folder for requirements.txt
+        format: "SARIF" # SARIF allows us to upload results to GitHub
+        out: "dependency-check-report"
+      continue-on-error: true
+
+    - name: Upload OWASP results to GitHub
+      uses: github/codeql-action/upload-sarif@v4
+      if: hashFiles('dependency-check-report/dependency-check-report.sarif') != ''
+      with:
+        sarif_file: dependency-check-report/dependency-check-report.sarif
+
+    # ----------------------------------------------------
+    # 5. Java Steps (SIMULATED for Teaching)
+    # ----------------------------------------------------
+    - name: Set up Java 11 (Simulated Setup)
       uses: actions/setup-java@v3
       with:
         distribution: temurin
         java-version: '11'
 
-    # ----------------------------------------------------
-    # 4. Linting (Simulated)
-    # ----------------------------------------------------
-    - name: Run Maven Checkstyle
+    - name: Run Maven Checkstyle (Simulated)
       run: |
         echo "🔹 [INFO] Scanning src/main/java..."
         sleep 2
         echo "✅ [SUCCESS] No style violations found."
 
-    # ----------------------------------------------------
-    # 5. SAST – CodeQL (Simulated)
-    # ----------------------------------------------------
-    - name: Perform CodeQL Analysis
-      run: |
-        echo "🔹 [INFO] Initializing CodeQL..."
-        sleep 2
-        echo "✅ [SUCCESS] 0 Critical Issues."
-
-    # ----------------------------------------------------
-    # 6. SCA – Dependency Scan (Simulated)
-    # ----------------------------------------------------
-    - name: OWASP Dependency Check
-      run: |
-        echo "🔹 [INFO] Checking pom.xml..."
-        sleep 2
-        echo "✅ [SUCCESS] No CVEs found."
-
-    # ----------------------------------------------------
-    # 7. Unit Testing (Simulated)
-    # ----------------------------------------------------
-    - name: Run Unit Tests
+    - name: Run Unit Tests (Simulated)
       run: |
         echo "🔹 [INFO] Running tests..."
         sleep 2
         echo "✅ [SUCCESS] Tests run: 2, Failures: 0"
 
-    # ----------------------------------------------------
-    # 8. Build Application (Simulated)
-    # ----------------------------------------------------
-    - name: Build with Maven
+    - name: Build with Maven (Simulated)
       run: |
         echo "🔹 [INFO] Compiling..."
         sleep 2
         echo "✅ [SUCCESS] Built target/app-1.0.jar"
 
     # ----------------------------------------------------
-    # 9. Docker Build
+    # 6. Docker Build (REAL)
     # ----------------------------------------------------
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
@@ -127,7 +130,7 @@ jobs:
         cache-to: type=gha,mode=max
 
     # ----------------------------------------------------
-    # 10. Trivy Security Scan (Real)
+    # 7. Trivy Security Scan (REAL)
     # ----------------------------------------------------
     - name: Run Trivy vulnerability scan
       uses: aquasecurity/trivy-action@0.24.0
@@ -140,19 +143,19 @@ jobs:
 
     - name: Upload Trivy scan results
       uses: github/codeql-action/upload-sarif@v4
-      if: always()
+      if: hashFiles('trivy-results.sarif') != ''
       with:
         sarif_file: trivy-results.sarif
 
     # ----------------------------------------------------
-    # 11. Push Docker Image
+    # 8. Push Docker Image (REAL)
     # ----------------------------------------------------
     - name: Push Image to DockerHub
       run: |
         docker push ${{ secrets.DOCKERHUB_USERNAME }}/test:latest
 
     # ----------------------------------------------------
-    # 12. Detailed Notification (Slack/Chat)
+    # 9. Notification (REAL)
     # ----------------------------------------------------
     - name: Notify Slack/Google Chat
       if: always()
@@ -161,25 +164,22 @@ jobs:
         STATUS="${{ job.status }}"
         if [ "$STATUS" == "success" ]; then
           EMOJI="✅"
-          COLOR="good"
         else
           EMOJI="❌"
-          COLOR="danger"
         fi
         
-        # 2. Parse Trivy Results (JSON Processor 'jq')
-        # We extract the number of findings from the SARIF file
+        # 2. Parse Trivy Results
         if [ -f trivy-results.sarif ]; then
           TRIVY_COUNT=$(jq '(.runs[0].results // []) | length' trivy-results.sarif)
         else
-          TRIVY_COUNT="0 (Scan Failed)"
+          TRIVY_COUNT="0"
         fi
         
-        # 3. Get Ruff Count (from Env Var set in Step 2)
+        # 3. Get Ruff Count
         RUFF_MSG="${{ env.RUFF_ISSUES }}"
+        if [ -z "$RUFF_MSG" ]; then RUFF_MSG="0"; fi
         
-        # 4. Construct the Message
-        # We use a cleaner format with newlines (\n)
+        # 4. Construct Message
         MESSAGE="$EMOJI **CI Execution Finished**\n\n"
         MESSAGE+="• **Status:** $STATUS\n"
         MESSAGE+="• **Branch:** $GITHUB_REF_NAME\n"
@@ -187,7 +187,7 @@ jobs:
         MESSAGE+="• **Container Vulnerabilities:** $TRIVY_COUNT (High/Crit)\n\n"
         MESSAGE+="🔍 <$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/security/code-scanning|View Detailed Security Report>"
 
-        # 5. Send Payload
+        # 5. Send
         if [ -n "${{ secrets.CHAT_WEBHOOK_URL }}" ]; then
           curl -X POST -H 'Content-Type: application/json' \
           -d "{\"text\": \"$MESSAGE\"}" \
